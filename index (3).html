@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Card Sorting Exercise</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            800: '#1e293b',
+                            900: '#0f172a',
+                        },
+                        rose: {
+                            800: '#9f1239',
+                            900: '#881337',
+                        },
+                        amber: {
+                            400: '#fbbf24',
+                            500: '#f59e0b',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0f172a; /* slate-900 */
+            color: #f8fafc;
+        }
+
+        /* Hide scrollbar for a cleaner deck look */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .card {
+            cursor: grab;
+            aspect-ratio: 4/3;
+            width: 100%;
+            height: 100%;
+            background-repeat: no-repeat;
+            transition: transform 0.1s ease-out, filter 0.1s;
+        }
+
+        .card:active {
+            cursor: grabbing;
+        }
+
+        .card.dragging {
+            opacity: 0.4;
+            transform: scale(0.95);
+        }
+
+        /* 
+         * Grid slots should maintain 4/3 aspect ratio to match the cards.
+         * We enforce the layout structure purely through CSS grid constraints.
+         */
+        .grid-slot {
+            aspect-ratio: 4/3;
+            width: 100%;
+            height: 100%;
+            border: 1px solid rgba(255, 255, 255, 0.1); /* Very subtle border to show slots */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            background-color: #1e293b; /* slate-800 */
+        }
+        
+        /* The overall grid has 4 cols and 3 rows, with flush slots */
+        .target-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            gap: 0;
+            width: 100%;
+            height: auto;
+            max-height: 100%;
+            aspect-ratio: 16/9; /* 4 cols of 4/3 aspect ratio = 16, 3 rows of 4/3 = 9 */
+            margin: 0 auto;
+            border: 2px solid #881337;
+        }
+
+        /* Ensure dropping visuals */
+        .drag-over {
+            background-color: rgba(251, 191, 36, 0.15) !important; /* amber tint */
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col overflow-hidden font-sans select-none">
+
+    <!-- Header -->
+    <header class="bg-rose-900 text-amber-400 p-3 lg:p-4 flex justify-between items-center shrink-0 shadow-md z-10">
+        <div>
+            <h1 class="text-xl lg:text-2xl font-bold tracking-wide">Intelligence Sorter</h1>
+            <p class="text-sm text-rose-100/80 hidden sm:block mt-0.5">Drag cards to order from Most Intelligent to Least Intelligent.</p>
+        </div>
+        <button id="reset-btn" class="bg-slate-900 hover:bg-slate-800 text-amber-400 border border-amber-400/50 px-4 py-2 rounded font-semibold transition-colors shadow">
+            Reset Grid
+        </button>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 flex w-full h-full overflow-hidden p-2 lg:p-4 gap-4">
+        
+        <!-- Left Pane: Deck (25-30%) -->
+        <aside class="w-[30%] lg:w-[25%] bg-slate-800 rounded-lg shadow-inner flex flex-col border border-slate-700 overflow-hidden shrink-0">
+            <div class="bg-slate-900/50 p-3 text-center border-b border-slate-700 font-bold text-amber-400 tracking-wider">
+                Card Deck
+            </div>
+            
+            <!-- Deck Dropzone container -->
+            <div id="deck" class="flex-1 overflow-y-auto no-scrollbar p-2 grid grid-cols-2 gap-2 content-start dropzone">
+                <!-- Cards injected here -->
+            </div>
+        </aside>
+
+        <!-- Right Pane: Grid (70-75%) -->
+        <section class="flex-1 flex flex-col justify-center min-w-0 bg-slate-900 relative">
+            
+            <!-- Header for the grid area -->
+            <div class="flex justify-between items-center mb-2 px-1 text-sm font-bold uppercase tracking-wider text-rose-300">
+                <span class="flex items-center gap-1">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    Most Intelligent
+                </span>
+                <span class="flex items-center gap-1">
+                    Least Intelligent
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+                </span>
+            </div>
+
+            <!-- Wrapper to strictly maintain aspect ratio scaling -->
+            <div class="flex-1 flex items-center justify-center overflow-hidden w-full">
+                <!-- The flush 4x3 target grid -->
+                <div id="grid" class="target-grid dropzone-container">
+                    <!-- 12 slots injected here -->
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <script>
+        const NUM_CARDS = 12;
+        const IMAGE_URL = 'image_c7a7bf.jpg';
+        
+        const deckEl = document.getElementById('deck');
+        const gridEl = document.getElementById('grid');
+        const resetBtn = document.getElementById('reset-btn');
+
+        let draggedCard = null;
+        let sourceContainer = null;
+
+        // Initialize App
+        function init() {
+            createGridSlots();
+            createCards();
+            setupDragAndDrop();
+            loadState();
+        }
+
+        function createGridSlots() {
+            for (let i = 0; i < NUM_CARDS; i++) {
+                const slot = document.createElement('div');
+                slot.id = `slot-${i}`;
+                slot.className = 'grid-slot dropzone';
+                
+                // Add faint background number for guidance
+                const numHint = document.createElement('span');
+                numHint.className = 'absolute text-slate-600/30 text-4xl font-black pointer-events-none select-none z-0';
+                numHint.innerText = i + 1;
+                
+                slot.appendChild(numHint);
+                gridEl.appendChild(slot);
+            }
+        }
+
+        function createCards() {
+            for (let i = 0; i < NUM_CARDS; i++) {
+                const card = document.createElement('div');
+                card.id = `card-${i}`;
+                card.className = 'card z-10 relative';
+                card.draggable = true;
+
+                // Mathematical Slicing per instructions:
+                // Col index (0 to 3), Row index (0 to 2)
+                const c = i % 4;
+                const r = Math.floor(i / 4);
+                
+                // X position: (c / 3) * 100%
+                // Y position: (r / 2) * 100%
+                const xPos = (c / 3) * 100;
+                const yPos = (r / 2) * 100;
+
+                card.style.backgroundImage = `url('${IMAGE_URL}')`;
+                card.style.backgroundSize = '400% 300%';
+                card.style.backgroundPosition = `${xPos}% ${yPos}%`;
+
+                // Add to deck initially
+                deckEl.appendChild(card);
+            }
+        }
+
+        // --- Drag and Drop Implementation ---
+
+        function setupDragAndDrop() {
+            // Attach card events
+            const cards = document.querySelectorAll('.card');
+            cards.forEach(card => {
+                card.addEventListener('dragstart', handleDragStart);
+                card.addEventListener('dragend', handleDragEnd);
+            });
+
+            // Attach dropzone events (slots AND the deck)
+            const dropzones = document.querySelectorAll('.dropzone');
+            dropzones.forEach(zone => {
+                zone.addEventListener('dragover', handleDragOver);
+                zone.addEventListener('dragenter', handleDragEnter);
+                zone.addEventListener('dragleave', handleDragLeave);
+                zone.addEventListener('drop', handleDrop);
+            });
+        }
+
+        function handleDragStart(e) {
+            draggedCard = this;
+            sourceContainer = this.parentElement;
+            
+            // Allow time for the drag ghost to render before hiding the original element
+            setTimeout(() => {
+                this.classList.add('dragging');
+                // If dragging from the deck, hide it so it collapses nicely.
+                // If dragging from grid, keeping it in layout prevents grid shifting, 
+                // but setting opacity to 0 visually removes it.
+                if (sourceContainer.id === 'deck') {
+                    this.style.display = 'none';
+                } else {
+                    this.style.opacity = '0.01'; 
+                }
+            }, 0);
+
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', this.id);
+        }
+
+        function handleDragEnd(e) {
+            this.classList.remove('dragging');
+            this.style.display = 'block';
+            this.style.opacity = '1';
+            draggedCard = null;
+            sourceContainer = null;
+            
+            // Clean up highlight classes
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            
+            saveState();
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault(); // Required to allow dropping
+            e.dataTransfer.dropEffect = 'move';
+            return false;
+        }
+
+        function handleDragEnter(e) {
+            e.preventDefault();
+            const dropzone = e.target.closest('.dropzone');
+            if (dropzone && dropzone !== sourceContainer) {
+                dropzone.classList.add('drag-over');
+            }
+        }
+
+        function handleDragLeave(e) {
+            const dropzone = e.target.closest('.dropzone');
+            if (dropzone) {
+                dropzone.classList.remove('drag-over');
+            }
+        }
+
+        function handleDrop(e) {
+            e.stopPropagation();
+            e.preventDefault();
+            
+            const dropzone = e.target.closest('.dropzone');
+            if (!dropzone || !draggedCard) return;
+
+            dropzone.classList.remove('drag-over');
+
+            // Find if there's already a card in the target dropzone
+            const existingCard = Array.from(dropzone.children).find(child => child.classList.contains('card'));
+
+            if (dropzone.id === 'deck') {
+                // Moving back to deck
+                dropzone.appendChild(draggedCard);
+            } else {
+                // Moving to a grid slot
+                if (existingCard) {
+                    // Swap logic
+                    sourceContainer.appendChild(existingCard);
+                }
+                dropzone.appendChild(draggedCard);
+            }
+        }
+
+        // --- State Management (localStorage) ---
+
+        function saveState() {
+            try {
+                const state = {};
+                document.querySelectorAll('.card').forEach(card => {
+                    state[card.id] = card.parentElement.id;
+                });
+                localStorage.setItem('cardSorterState', JSON.stringify(state));
+            } catch (error) {
+                console.warn("localStorage not available:", error);
+            }
+        }
+
+        function loadState() {
+            try {
+                const saved = localStorage.getItem('cardSorterState');
+                if (saved) {
+                    const state = JSON.parse(saved);
+                    for (const [cardId, zoneId] of Object.entries(state)) {
+                        const card = document.getElementById(cardId);
+                        const zone = document.getElementById(zoneId);
+                        if (card && zone) {
+                            zone.appendChild(card);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn("Failed to load state from localStorage:", error);
+            }
+        }
+
+        function resetExercise() {
+            localStorage.removeItem('cardSorterState');
+            const cards = Array.from(document.querySelectorAll('.card'));
+            
+            // Sort them numerically by ID to put them back in the deck in original order
+            cards.sort((a, b) => {
+                const numA = parseInt(a.id.split('-')[1]);
+                const numB = parseInt(b.id.split('-')[1]);
+                return numA - numB;
+            });
+
+            cards.forEach(card => {
+                deckEl.appendChild(card);
+            });
+        }
+
+        resetBtn.addEventListener('click', resetExercise);
+
+        // Run on load
+        window.addEventListener('DOMContentLoaded', init);
+
+    </script>
+</body>
+</html>
